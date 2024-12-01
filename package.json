@@ -2,6 +2,9 @@
   "name": "aiml_chatbot",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "@radix-ui/react-collapsible": "^1.1.1",
     "@tabler/icons-react": "^3.23.0",
