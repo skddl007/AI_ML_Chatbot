@@ -1,5 +1,5 @@
 {
-  "name": "chat-gpt",
+  "name": "aiml_chatbot",
   "version": "0.1.0",
   "private": true,
   "dependencies": {
