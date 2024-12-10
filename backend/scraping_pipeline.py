@@ -3,6 +3,8 @@ import re
 import csv
 import ast
 import os
+import pickle
+import shutil
 # import logging
 
 # Configure logging
@@ -265,7 +267,7 @@ def get_topic_info(page_number,topics):
             return topic
     return 'Null'
 
-def add_additional_info(input_file_path, output_file_path, headings, topics, book_name,book_auther,book_url):
+def add_additional_info(input_file_path, output_file_path, headings, topics, book_name,book_auther):
     paragraphs = []
     
     with open(input_file_path, 'r', encoding='utf-8') as file:
@@ -299,7 +301,7 @@ def add_additional_info(input_file_path, output_file_path, headings, topics, boo
         # change and make it variables
         paragraph['Book Name'] = book_name
         paragraph['Book Author'] = book_auther
-        paragraph['Book URL'] = book_url
+        # paragraph['Book URL'] = book_url
     
     # print("finaly peragraph start from ",paragraphs[0],"\n")
     with open(output_file_path, 'w', encoding='utf-8') as file:
@@ -496,12 +498,32 @@ def txt_to_csv(input_file, output_file):
     fieldnames = sorted(all_keys)
     with open(output_file, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()    
+        writer.writeheader()
 
         for item in data:
             writer.writerow(item)
 
     print(f"CSV file has been created: {output_file}")
+
+def csv_to_pkl_and_use(csv_input_file, pkl_output_file):
+    print("enter in pkl file")
+    # Ensure the output directory exists
+    os.makedirs(os.path.dirname(pkl_output_file), exist_ok=True)
+
+    # Read the input CSV file
+    data = []
+    with open(csv_input_file, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            data.append(row)
+
+    # Write data to .pkl file
+    with open(pkl_output_file, 'wb') as f:
+        pickle.dump(data, f)
+
+    print(f"PKL file has been created: {pkl_output_file}")
+
+
 
 
 def topics_extrection(pdf_path, output_tex, start_page, end_page,tex_file_path_for_heading):
@@ -567,7 +589,7 @@ def headings_classification(tex_file_path_for_heading,topics_arr,heading):
 
 
 # Main Pipeline Execution
-def execute_pipeline(pdf_path, output_tex, start_page, end_page, csv_output_path, topics_start,topics_end,tex_file_path_for_heading, book_name, book_auther, book_url):
+def execute_pipeline(pdf_path, output_tex, start_page, end_page, csv_output_path, topics_start,topics_end,tex_file_path_for_heading, book_name, book_auther,pkl_path):
     # Step 1: Convert PDF to LaTeX
     pdf_to_latex(pdf_path,start_page,end_page,output_tex)
 
@@ -584,12 +606,129 @@ def execute_pipeline(pdf_path, output_tex, start_page, end_page, csv_output_path
     process_tex_file(output_tex, [entry[2] for entry in topics_arr],output_tex)
 
     read_tex_file(output_tex, output_tex)
-    add_additional_info(output_tex, output_tex, headings, topics_arr, book_name, book_auther, book_url)
+    add_additional_info(output_tex, output_tex, headings, topics_arr, book_name, book_auther)
     
     # Step 3: Save cleaned text to CSV
     txt_to_csv(output_tex, csv_output_path)
+    csv_to_pkl_and_use(csv_output_path, pkl_path)
 
-def process_pdfs_in_folder(folder_path, tex_file_path_for_heading):
+# def process_pdfs_in_folder(folder_path, tex_file_path_for_heading,form_data):
+#     # Create an output folder for CSV files
+#     csv_output_folder = os.path.join(folder_path, "csv_outputs")
+#     os.makedirs(csv_output_folder, exist_ok=True)
+
+#     # Create an output folder for .tex files
+#     tex_output_folder = os.path.join(folder_path, "tex_files")
+#     os.makedirs(tex_output_folder, exist_ok=True)
+
+#     # Iterate through all PDF files in the folder
+#     for file_name in os.listdir(folder_path):
+#         if file_name.endswith(".pdf"):
+#             pdf_path = os.path.join(folder_path, file_name)
+#             base_name = os.path.splitext(file_name)[0]
+#             csv_output_path = os.path.join(csv_output_folder, f"{base_name}.csv")
+#             tex_output_path = os.path.join(tex_output_folder, f"{base_name}.tex")
+
+#             # Check if the CSV already exists
+#             if os.path.exists(csv_output_path):
+#                 print(f"Skipping '{file_name}' as it has already been processed.")
+#                 continue
+
+#             print(f"\nProcessing new PDF: {file_name}")
+
+#             # Prompt user for input parameters for each PDF
+#             topics_start = int(input(f"Enter the topics start index for '{file_name}': "))
+#             topics_end = int(input(f"Enter the topics end index for '{file_name}': "))
+#             start_page = int(input(f"Enter the start page for '{file_name}': "))
+#             end_page = int(input(f"Enter the end page for '{file_name}': "))+start_page
+#             book_name = input("Enter the book name: ")
+#             book_author = input("Enter the book author: ")
+#             # book_url = input("Enter the book URL: ")
+
+#             # Execute the ETL pipeline for the current PDF
+#             execute_pipeline(
+#                 pdf_path,
+#                 tex_output_path,  # Store the .tex file in the dedicated folder
+#                 start_page,
+#                 end_page,
+#                 csv_output_path,
+#                 topics_start,
+#                 topics_end,
+#                 tex_file_path_for_heading,
+#                 book_name,
+#                 book_author,
+#                 book_url
+#             )
+
+#     print(f"\nAll new PDFs processed. CSV files are saved in: {csv_output_folder}")
+#     print(f".tex files are saved in: {tex_output_folder}")
+
+
+# def process_pdfs_in_folder(folder_path, tex_file_path_for_heading, form_data):
+#     # Create an output folder for CSV files
+#     csv_output_folder = os.path.join(folder_path, "csv_outputs")
+#     os.makedirs(csv_output_folder, exist_ok=True)
+
+#     # Create an output folder for .tex files
+#     tex_output_folder = os.path.join(folder_path, "tex_files")
+#     os.makedirs(tex_output_folder, exist_ok=True)
+
+#     # Iterate through all PDF files in the folder
+#     for file_name in os.listdir(folder_path):
+#         if file_name.endswith(".pdf"):
+#             pdf_path = os.path.join(folder_path, file_name)
+#             base_name = os.path.splitext(file_name)[0]
+#             csv_output_path = os.path.join(csv_output_folder, f"{base_name}.csv")
+#             tex_output_path = os.path.join(tex_output_folder, f"{base_name}.tex")
+
+#             # Check if the CSV already exists
+#             if os.path.exists(csv_output_path):
+#                 print(f"Skipping '{file_name}' as it has already been processed.")
+#                 continue
+
+#             print(f"\nProcessing new PDF: {file_name}")
+
+#             # Get parameters from form_data
+#             topics_start = form_data["chapter_start_page"]
+#             topics_end = form_data["chapter_end_page"]
+#             start_page = form_data["content_start_page"]
+#             end_page = form_data["content_end_page"]
+#             book_name = form_data["book_name"]
+#             book_author = form_data["author_name"]
+
+#             # Execute the ETL pipeline for the current PDF
+#             execute_pipeline(
+#                 pdf_path,
+#                 tex_output_path,
+#                 start_page,
+#                 end_page,
+#                 csv_output_path,
+#                 topics_start,
+#                 topics_end,
+#                 tex_file_path_for_heading,
+#                 book_name,
+#                 book_author,
+#             )
+
+#     print(f"\nAll new PDFs processed. CSV files are saved in: {csv_output_folder}")
+#     print(f".tex files are saved in: {tex_output_folder}")
+
+def cleanup_directory(directory_path):
+    """
+    Deletes all files in the specified directory.
+    """
+    for file_name in os.listdir(directory_path):
+        file_path = os.path.join(directory_path, file_name)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+        except Exception as e:
+            print(f"Failed to delete {file_path}. Reason: {e}")
+
+
+def process_pdfs_in_folder(folder_path, tex_file_path_for_heading, form_data):
     # Create an output folder for CSV files
     csv_output_folder = os.path.join(folder_path, "csv_outputs")
     os.makedirs(csv_output_folder, exist_ok=True)
@@ -598,6 +737,10 @@ def process_pdfs_in_folder(folder_path, tex_file_path_for_heading):
     tex_output_folder = os.path.join(folder_path, "tex_files")
     os.makedirs(tex_output_folder, exist_ok=True)
 
+    # Create an output folder for pickle files
+    pkl_output_folder = os.path.join(folder_path, "pkl_file")
+    os.makedirs(pkl_output_folder, exist_ok=True)
+
     # Iterate through all PDF files in the folder
     for file_name in os.listdir(folder_path):
         if file_name.endswith(".pdf"):
@@ -605,6 +748,7 @@ def process_pdfs_in_folder(folder_path, tex_file_path_for_heading):
             base_name = os.path.splitext(file_name)[0]
             csv_output_path = os.path.join(csv_output_folder, f"{base_name}.csv")
             tex_output_path = os.path.join(tex_output_folder, f"{base_name}.tex")
+            pkl_file_path = os.path.join(pkl_output_folder, f"{base_name}.pkl")
 
             # Check if the CSV already exists
             if os.path.exists(csv_output_path):
@@ -613,19 +757,18 @@ def process_pdfs_in_folder(folder_path, tex_file_path_for_heading):
 
             print(f"\nProcessing new PDF: {file_name}")
 
-            # Prompt user for input parameters for each PDF
-            topics_start = int(input(f"Enter the topics start index for '{file_name}': "))
-            topics_end = int(input(f"Enter the topics end index for '{file_name}': "))
-            start_page = int(input(f"Enter the start page for '{file_name}': "))
-            end_page = int(input(f"Enter the end page for '{file_name}': "))+start_page
-            book_name = input("Enter the book name: ")
-            book_author = input("Enter the book author: ")
-            book_url = input("Enter the book URL: ")
-
+            # Get parameters from form_data
+            topics_start = form_data["chapter_start_page"]
+            topics_end = form_data["chapter_end_page"]
+            start_page = form_data["content_start_page"]
+            end_page = form_data["content_end_page"]
+            book_name = form_data["book_name"]
+            book_author = form_data["author_name"]
+            
             # Execute the ETL pipeline for the current PDF
             execute_pipeline(
                 pdf_path,
-                tex_output_path,  # Store the .tex file in the dedicated folder
+                tex_output_path,
                 start_page,
                 end_page,
                 csv_output_path,
@@ -634,17 +777,24 @@ def process_pdfs_in_folder(folder_path, tex_file_path_for_heading):
                 tex_file_path_for_heading,
                 book_name,
                 book_author,
-                book_url
+                pkl_file_path
             )
 
     print(f"\nAll new PDFs processed. CSV files are saved in: {csv_output_folder}")
     print(f".tex files are saved in: {tex_output_folder}")
 
+    # finally:
+    #     # Cleanup all output directories after processing
+    #     print("\nCleaning up output directories...")
+    #     cleanup_directory(csv_output_folder)
+    #     cleanup_directory(tex_output_folder)
+    #     cleanup_directory(pkl_output_folder)
+    #     print("All temporary files have been deleted.")
 
-# Run the pipeline
-if __name__ == '__main__':
-    folder_path = "./"
-    tex_file_path_for_heading = "./heading_elements.tex"
+# # Run the pipeline
+# if __name__ == '__main__':
+#     folder_path = "./"
+#     tex_file_path_for_heading = "./heading_elements.tex"
 
     # Process all new PDFs in the folder
-    process_pdfs_in_folder(folder_path, tex_file_path_for_heading)
+    # process_pdfs_in_folder(folder_path, tex_file_path_for_heading)

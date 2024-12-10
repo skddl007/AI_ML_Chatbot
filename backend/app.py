@@ -1,39 +1,71 @@
-
 import os
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify
 import psycopg2
+from psycopg2.extras import DictCursor
+from sentence_transformers import SentenceTransformer
+import google.generativeai as genai  # API 
+import fitz  # PyMuPDF
+import csv
+import ast
+import re
+from flask_cors import CORS  # To allow CORS requests from React
 from psycopg2.extras import execute_values
 import warnings
 import csv
+from groq import Groq
+from dotenv import load_dotenv
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
-from sentence_transformers import SentenceTransformer
-import google.generativeai as genai  # API 
-import re
+from scraping_pipeline import process_pdfs_in_folder
+from werkzeug.utils import secure_filename
+import pandas as pd
 
-# Suppress FutureWarnings
+
+# Initialize Flask app and enable CORS
+app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes, allowing communication with React frontend
+
+
+# Load SBERT model
+load_dotenv()
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 # Load SBERT model
-# model = SentenceTransformer('all-MiniLM-L6-v2')
 model = SentenceTransformer('paraphrase-distilroberta-base-v1')
+# Initialize Groq API
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+print(os.getenv("GROQ_API_KEY"))
 
-# Database connection function
-# def get_db_connection():
-#     return psycopg2.connect(os.environ['DATABASE_URL'])
+#  genrative model  using Gemini API
+def genrative_model(train_text,query):
+    GOOGLE_API_KEY = "AIzaSyBWbxD6T1RZU45V3EerkMnNjwU7w8r5NL0"
+    genai.configure(api_key=GOOGLE_API_KEY)
 
+    model = genai.GenerativeModel('gemini-pro')
+    # train_text = "Provide a response in a single paragraph: "
+    full_query = train_text + query
+
+    # Generate the content
+    response = model.generate_content(full_query)
+
+    return response.text
+
+
+# ------------------------------------------------------------------------Basic DB/Operation------------------
 def check_for_alphanumeric(s):
     pattern = r'[A-Za-z(){}\[\]0-9:;,.?"\'/\-\u00E9\u2018\u2019\u2014*\u2013\u2014\u2014\u2013]'
     temp = re.sub(pattern, '', s)
     return temp
 
-
+# Database connection function
 def get_db_connection():
     return psycopg2.connect(
         host="localhost",            # Your local PostgreSQL host
         database="smartsearch_db",   # Replace with your local database name
         user="postgres",             # Replace with your PostgreSQL username
-        password="Rajat@1234"     # Replace with your PostgreSQL password
+        password="Rajat@1234"        # Replace with your PostgreSQL password
     )
 
 def init_db():
@@ -68,6 +100,7 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
+
 
 def check_and_initialize_db():
     print("Checking database initialization...")
@@ -149,103 +182,250 @@ def process_all_csv_files():
         process_csv_file(csv_file)
         print(f"Finished processing {csv_file}")
 
-#  genrative model 
-def genrative_model(train_text,query):
-    GOOGLE_API_KEY = "AIzaSyBWbxD6T1RZU45V3EerkMnNjwU7w8r5NL0"
-    genai.configure(api_key=GOOGLE_API_KEY)
+# ----------------------------------------------- Genrative Model--------------------------------------
+# Rephrased System Prompt
+system_prompt = (
+    "You are a highly precise and concise assistant. Follow these principles when generating responses:\n\n"
+    "1. Keep responses as short as possible while fully addressing the user's query.\n"
+    "2. Provide only essential information—avoid unnecessary details or elaboration.\n"
+    "3. Ensure factual accuracy and avoid guessing or fabricating information.\n"
+    "4. Use bullet points or numbered lists for clarity if needed.\n"
+    "5. If clarification is required, ask brief and specific follow-up questions.\n"
+    "6. Acknowledge uncertainty and suggest external resources only if necessary.\n\n"
+    "Additional Behavior:\n"
+    "- If asked your name, respond with: 'EVA'.\n"
+    "- If asked about your designed or developed or developers or created, respond with: 'Rajat, Satyam, Sandeep, students from Sitare University under the guidance of Dr. Kushal Shah.'\n"
+    "- If asked about your purpose or work, respond with: 'I am designed to assist with AI/ML-related queries and provide support for technical tasks.'\n"
+    "- Always stay precise, relevant, and focused on the query."
+)
+# Compute embeddings for text
+def compute_embedding(text):
+    return model.encode(text).tolist()
 
-    model = genai.GenerativeModel('gemini-pro')
-    # train_text = "Provide a response in a single paragraph: "
-    full_query = train_text + query
 
-    # Generate the content
-    response = model.generate_content(full_query)
+# 1. Filtering functions
+def contains_inappropriate_content(text):
+    """
+    Check if the text contains inappropriate or flagged content using regex patterns.
+    """
+    inappropriate_patterns = [
+        r"\b(?:f\*?u\*?c\*?k|s\*?h\*?i\*?t|b\*?i\*?t\*?c\*?h)\b",  # Common profanities with optional masking
+        r"\b(?:a\*?s\*?s|d\*?a\*?mn|c\*?u\*?n\*?t)\b",
+        r"[^\w\s]{3,}",  # Strings with excessive symbols
+        r"(.)\1{3,}",  # Repeated characters like "aaaa" or "!!!!"
+    ]
 
-    return response.text
+    for pattern in inappropriate_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
 
-# responce  = genrative_model()
+    if is_random_string(text):
+        return True
 
-# Flask application code
-app = Flask(__name__)
+    return False
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+def is_random_string(text):
+    """
+    Check for random-like strings using length and entropy heuristics.
+    """
+    if len(text.split()) < 5:
+        return True
 
-@app.route('/query', methods=['POST'])
-def query_paragraphs():
-    data = request.json
-    question = data['question']
+    unique_chars = set(text)
+    entropy = len(unique_chars) / len(text)
+    return entropy > 0.8
 
+# 2. Main refinement function
+def refine_and_answer_with_groq(question, paragraphs):
+    # Combine all paragraphs into a single context
+    context = "\n\n".join([f"Paragraph {idx + 1}: {para['text']}" for idx, para in enumerate(paragraphs)])
+    
+    # Filter inappropriate paragraphs
+    filtered_paragraphs = [para['text'] for para in paragraphs if not contains_inappropriate_content(para['text'])]
+    
+    # Calculate relevance using cosine similarity
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform([question] + filtered_paragraphs)
+    similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+    top_indices = similarities.argsort()[-3:][::-1]
+    top_paragraphs = [filtered_paragraphs[idx] for idx in top_indices]
+    top_context = "\n\n".join([f"Paragraph {idx + 1}: {filtered_paragraphs[idx]}" for idx in top_indices])
+
+    # Generate response using system prompt
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Question: {question}\n\nContext:\n{top_context}"}
+    ]
+    chat_completion = groq_client.chat.completions.create(
+        messages=messages,
+        model="llama3-8b-8192",
+    )
+    response = chat_completion.choices[0].message.content.strip()
+
+    return {
+        "response": response,
+        "top_paragraphs": top_paragraphs
+    }
+
+
+def query_paragraphs(question):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    train_query ="Provide a response in a single paragraph: "
-    query_responce_gemmini = genrative_model(train_query,question)
 
-    print("query_responce_gemmini responce " ,query_responce_gemmini) 
-    query_embedding = model.encode(query_responce_gemmini)
+    # Generate embedding for the question
+    query_embedding = model.encode(question).tolist()
 
+    # Query the database
     cur.execute("""
         SELECT *, 1 - (embedding <=> %s::vector) AS similarity
         FROM smartsearch
         ORDER BY embedding <=> %s::vector
-        LIMIT 5
-    """, (query_embedding.tolist(), query_embedding.tolist()))
+        LIMIT 10
+    """, (query_embedding, query_embedding))
 
     results = cur.fetchall()
-
     cur.close()
     conn.close()
+    # print("reultes ->  ", results)
+    return results
+
+
+# -------------------------API route -----------------------
+@app.route("/member")
+def members():
+    return {"member":["rajat,mayank"]}
+
+
+# Configure upload and output folders
+UPLOAD_FOLDER = './uploads'
+OUTPUT_FOLDER = './outputs'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
+
+# Ensure folders exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+@app.route("/upload", methods=["POST"])
+def upload_pdf():
+    try:
+        # Retrieve the uploaded file
+        file = request.files.get('file')
+        
+        # Parse and validate form data
+        try:
+            form_data = {
+                "book_name": request.form.get('bookName'),
+                "author_name": request.form.get('authorName'),
+                "content_start_page": int(request.form.get('contentStartPage')),
+                "content_end_page": int(request.form.get('contentEndPage')),
+                "chapter_start_page": int(request.form.get('chapterStartPage')),
+                "chapter_end_page": int(request.form.get('chapterEndPage')),
+            }
+        except (TypeError, ValueError) as e:
+            return jsonify({"error": "Invalid form data. Please ensure all fields are filled correctly."}), 400
+
+        print("Form Data:", form_data)
+
+        if not file or not all(form_data.values()):
+            return jsonify({"error": "All fields are required."}), 400
+
+        if not file.filename.endswith('.pdf'):
+            return jsonify({"error": "Invalid file type. Only PDFs are allowed."}), 400
+
+        # Save the uploaded file
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+
+        print(f"File saved to: {file_path}")
+
+        # Process PDF files using the provided pipeline function
+        process_pdfs_in_folder(
+            folder_path=app.config['UPLOAD_FOLDER'],
+            tex_file_path_for_heading='./heading_elements.tex',  # Path to the .tex file
+            form_data=form_data
+        )
+
+        # Generate paths for CSV and Pickle files
+        csv_file_path = os.path.join(app.config['UPLOAD_FOLDER'], "output.csv")
+        df = pd.read_csv(csv_file_path)
+        print(df.sample(2))
+        pickle_file_path = os.path.join(app.config['OUTPUT_FOLDER'], "output.pkl")
+
+        # Validate if the CSV file exists
+        if os.path.exists(csv_file_path):
+            # Load the CSV and save it as a Pickle file
+            df = pd.read_csv(csv_file_path)
+            df.to_pickle(pickle_file_path)
+
+            return jsonify({
+                "message": "File uploaded and processed successfully.",
+                "csv_path": csv_file_path,
+                "pickle_path": pickle_file_path,
+            }), 200
+        else:
+            return jsonify({"error": "Processing failed; CSV not generated."}), 500
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = request.get_json()
+    question = data.get("message")
     
-    # Filter results with similarity > 0.5  
-    filtered_results = [row for row in results if float(row['similarity']) > 0.5]
-    # if not filtered_results:
-    #     return jsonify({"message": "Sorry, no relevant results found."})
+    if not os.path.exists('db_initialized.flag'):
+        # print("Initializing database...")
+        init_db()
+        with open('db_initialized.flag', 'w') as flag_file:
+            flag_file.write('Database initialized')
+        # print("Database initialized.")
+    else:
+        print("Database already initialized.")
 
-    # Take the top 3 results with the highest similarity
-    top_results = filtered_results[:3]
+    # print("\nSearching for relevant paragraphs...\n")
+    top_results = query_paragraphs(question)
+
+    if len(top_results) == 0:
+        # print("No relevant results found.")
+        return jsonify({"error": "No relevant results found"}), 404
+
+    answer = refine_and_answer_with_groq(question, top_results)
+    # print("answer ", answer['top_paragraphs'])
+    # print("top_results ", top_results)
+    # print("\n\n")
+    # print("\nGenerated Answer:")   
+    # for key, value in answer.items():
+    #     print(key, value)
+    #     print("\n")
+        
+    response = answer['response']
+    arr = answer["top_paragraphs"]
+    top_three_relative_ans = []
+    for ans in arr:
+        found = False
+        for idx, result in enumerate(top_results):
+            # Assuming the 8th element of each result contains the relevant text
+            if ans in result[8]:
+                # print(f"Answer found at index {idx} in top_results")
+                result.pop(10)
+                top_three_relative_ans.append(result)
+                found = True
+                break
+        if not found:
+            print("Answer not found in top_results")
+
+    # Return the JSON response
+    return jsonify({
+        "response": response,
+        "top_three_relative_ans": top_three_relative_ans
+    })
     
-    # # Correct the grammar of each chunk
-    train_query = 'Correct the grammar and format this text, ensuring that the meaning and information remains unchanged: '
 
-    corrected_chunks = [genrative_model(train_query, row['text']) for row in top_results]
-    print("corrrected_chunks ",corrected_chunks)
-
-
-    # print("top results ",top_results[0])
-    # # Combine the grammar-corrected chunks into a final response
-    # train_query = "After grammar correction, create a final well-formed, cohesive paragraph that combines all three chunks. The combined paragraph should maintain the context of all chunks, present them in a logical order, and ensure smooth transitions between them without introducing any new information or hallucinations: "
-    # combined_response = genrative_model(train_query, " ".join(corrected_chunks))
-
-    if not corrected_chunks:
-        return jsonify({"message": "Sorry, no relevant results found."})
-
-    for i in range(len(top_results)):
-        top_results[i][8] = check_for_alphanumeric(top_results[i][8])
-
-    for i in range(len(corrected_chunks)):
-        top_results[i][8] = corrected_chunks[i]
-    
-    # print(top_results)
-
-    return jsonify([{
-        "content": row['text'],
-        "similarity": float(row['similarity']),
-        "book_author": row['book_author'],
-        "book_name": row['book_name'],
-        "book_url": row['book_url'],
-        "chapter_name": row['chapter_name'],
-        "chapter_number": row['chapter_number'],
-        "page": row['page'],
-        "paragraph": row['paragraph'],
-        "topic": row['topic'],
-        # "combined_response": combined_response  # Add the combined response in the response data
-    } for row in top_results])
 
 
 if __name__ == '__main__':
-    print("Starting application...")
-    port = int(os.environ.get('PORT', 10000))
-    print(f"Attempting to run app on port {port}")
-    app.run(host='0.0.0.0', port=port)
-    print("App finished running.")
+    print("Starting Flask API on port 3002")
+    app.run(host='0.0.0.0', port=3002)
