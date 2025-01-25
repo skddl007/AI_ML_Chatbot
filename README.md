@@ -144,7 +144,7 @@ python app.py
 
 
 ## 📄 License
-Distributed under the MIT License. See `LICENSE.md` for more information.
+Distributed under the GNU GENERAL PUBLIC LICENSE. See `LICENSE.md` for more information.
 
 ## 🙏 Acknowledgements
 - Sentence Transformers
