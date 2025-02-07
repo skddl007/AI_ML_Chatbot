@@ -62,10 +62,10 @@ def check_for_alphanumeric(s):
 # Database connection function
 def get_db_connection():
     return psycopg2.connect(
-        host="localhost",            # Your local PostgreSQL host
-        database="smartsearch_db",   # Replace with your local database name
-        user="postgres",             # Replace with your PostgreSQL username
-        password="Rajat@1234"        # Replace with your PostgreSQL password
+        host="pg-35f1b54a-saneeipk-09e5.k.aivencloud.com",            # Your local PostgreSQL host
+        database="defaultdb",   # Replace with your local database name
+        user="avnadmin",             # Replace with your PostgreSQL username
+        password="AVNS_huKS1cFgf7enJIAZl28"        # Replace with your PostgreSQL password
     )
 
 def init_db():
